@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Herbal Garden - Voice Controller & ESP32 Telemetry</title>
+  <!-- Tailwind CSS & FontAwesome -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            emerald: {
+              450: '#10b981',
+              950: '#022c22',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Custom scrollbar for terminal */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(51, 65, 85, 0.8);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(71, 85, 105, 1);
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 0.3; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .mic-listening {
+      animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-emerald-500/30 selection:text-emerald-300">
+
+  <!-- Top Navigation & Hardware Gateway Status -->
+  <header class="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-xl sticky top-0 z-40 px-4 md:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
+    <!-- Brand / System Identity -->
+    <div class="flex items-center space-x-3.5">
+      <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 p-[1px] shadow-lg shadow-emerald-950/50">
+        <div class="w-full h-full bg-slate-950 rounded-2xl flex items-center justify-center text-emerald-400 text-xl">
+          <i class="fa-solid fa-seedling"></i>
+        </div>
+      </div>
+      <div>
+        <div class="flex items-center space-x-2">
+          <h1 class="text-base md:text-lg font-bold tracking-tight text-white">Herbal Garden Voice Hub</h1>
+          <span class="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">v2.4 ESP32-Safe</span>
+        </div>
+        <p class="text-xs text-slate-400 flex items-center gap-2">
+          <span>Dual Arbitration Gateway</span>
+          <span class="w-1 h-1 rounded-full bg-slate-600"></span>
+          <span id="gatewayMode">Simulation Engine</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- Center / Actions: Hardware Link & Calibration -->
+    <div class="flex items-center flex-wrap gap-2.5">
+      <!-- WebSocket Connection Pill -->
+      <button onclick="toggleWsModal()" class="flex items-center space-x-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 px-3 py-1.5 rounded-xl text-xs font-medium transition-all group">
+        <span class="relative flex h-2 w-2">
+          <span id="wsStatusPing" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+          <span id="wsStatusDot" class="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+        </span>
+        <span id="wsStatusText" class="text-slate-300 group-hover:text-white">Sim Mode (Offline)</span>
+        <i class="fa-solid fa-sliders text-slate-500 text-[11px] group-hover:text-slate-300"></i>
+      </button>
+
+      <!-- Sensor Calibration Modal Button -->
+      <button onclick="openCalibrationModal()" class="flex items-center space-x-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:text-white transition">
+        <i class="fa-solid fa-microchip text-teal-400 text-xs"></i>
+        <span>Calibrate Probes</span>
+      </button>
+
+      <!-- Add Herb Profile Button -->
+      <button onclick="openAddHerbModal()" class="flex items-center space-x-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:text-white transition">
+        <i class="fa-solid fa-plus text-emerald-400 text-xs"></i>
+        <span>Add Herb</span>
+      </button>
+
+      <!-- Voice Recognition Trigger -->
+      <button id="micBtn" class="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-lg shadow-emerald-950/60 active:scale-95 text-white">
+        <i id="micIcon" class="fa-solid fa-microphone"></i>
+        <span id="micText">Voice Trigger</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Safety Rules Invariant Notification Banner -->
+  <div class="bg-gradient-to-r from-emerald-950/40 via-slate-900/40 to-cyan-950/40 border-b border-slate-800/60 px-6 py-2 text-[11px] text-slate-400 flex flex-wrap items-center justify-between gap-2">
+    <div class="flex items-center space-x-3">
+      <span class="flex items-center gap-1.5 text-emerald-400 font-semibold uppercase tracking-wider text-[10px]">
+        <i class="fa-solid fa-shield-halved"></i> Active Safety Rules:
+      </span>
+      <span>Ceiling: <strong class="text-slate-300">&le; 60%</strong> (Hypoxia Guard)</span>
+      <span class="text-slate-600">•</span>
+      <span>Pulse: <strong class="text-slate-300">Strict 3.0s (~40 mL)</strong></span>
+      <span class="text-slate-600">•</span>
+      <span>Cooldown: <strong class="text-slate-300">60s Capillary Lockout</strong></span>
+      <span class="text-slate-600">•</span>
+      <span>Relay Polarity: <strong class="text-slate-300">Active-LOW (Init HIGH)</strong></span>
+    </div>
+    <div class="text-[10px] text-slate-500 font-mono">ADC1 Only (Wi-Fi Safe: GPIO 32, 33, 34)</div>
+  </div>
+
+  <!-- Main Dashboard Workspace -->
+  <main class="flex-1 p-4 md:p-8 max-w-7xl w-full mx-auto flex flex-col gap-6">
+
+    <!-- Section 1: Herb Profiles Container (Grid of Plant Cards) -->
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-base font-bold text-white flex items-center gap-2">
+          <span>Active Herb Profiles</span>
+          <span id="herbCountBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-normal">3 Monitored</span>
+        </h2>
+        <p class="text-xs text-slate-400">Individual capacitive sensor telemetry and relay actuator channels</p>
+      </div>
+      <div class="text-xs text-slate-400 flex items-center gap-2">
+        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400"></span> Optimal</span>
+        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-rose-400"></span> Deficit (&lt;40%)</span>
+        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span> Saturated (&ge;60%)</span>
+      </div>
+    </div>
+
+    <!-- Herb Cards Grid (Auto-populated from State) -->
+    <div id="herbCardsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <!-- Herb Cards will be dynamically rendered and updated here -->
+    </div>
+
+    <!-- Section 2: Bottom Control Panel (Live Voice Arbitration & Audit Log) -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+      <!-- Speech Recognition & Interaction Center -->
+      <div class="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between backdrop-blur-md">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <i class="fa-solid fa-microphone-lines text-emerald-400"></i>
+              <span>Voice Arbitration Engine</span>
+            </h3>
+            <span id="speechStateTag" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">Ready</span>
+          </div>
+
+          <!-- Transcript Display Box -->
+          <div class="bg-slate-950/80 border border-slate-800/80 rounded-xl p-3.5 mb-3">
+            <span class="text-[10px] text-slate-400 uppercase tracking-wider block font-semibold mb-1">Last Transcript</span>
+            <p id="transcriptText" class="text-sm italic text-slate-200 min-h-[2.5rem] flex items-center">
+              "Click 'Voice Trigger' or type a command below..."
+            </p>
+          </div>
+
+          <!-- Manual Voice Command Fallback (Rules.md: Graceful Speech Degradation) -->
+          <form id="manualVoiceForm" onsubmit="handleManualCommand(event)" class="space-y-2">
+            <label class="text-[11px] font-medium text-slate-400 block">Manual Voice Command Fallback</label>
+            <div class="flex gap-2">
+              <input type="text" id="manualCommandInput" placeholder='e.g., "Water the Tulsi", "Status report"' 
+                     class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500">
+              <button type="submit" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-2 rounded-xl text-xs font-semibold text-slate-200 transition">
+                Send
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Voice Command Help Hints -->
+        <div class="mt-4 pt-3 border-t border-slate-800/70 text-[11px] text-slate-400 space-y-1">
+          <span class="font-semibold text-slate-300 block">Recognized Natural Phrases:</span>
+          <div class="flex flex-wrap gap-1.5 text-[10px]">
+            <span class="px-2 py-0.5 rounded-md bg-slate-800/70 text-slate-300">"Water the Tulsi"</span>
+            <span class="px-2 py-0.5 rounded-md bg-slate-800/70 text-slate-300">"Give water to Mint"</span>
+            <span class="px-2 py-0.5 rounded-md bg-slate-800/70 text-slate-300">"Dose Rosemary"</span>
+            <span class="px-2 py-0.5 rounded-md bg-slate-800/70 text-slate-300">"Garden moisture status"</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Log Terminal & Arbitration Audit Trail -->
+      <div class="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex flex-col lg:col-span-2 backdrop-blur-md">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center space-x-2">
+            <i class="fa-solid fa-terminal text-teal-400 text-xs"></i>
+            <h3 class="text-sm font-bold text-white">Dual-Safety Audit Trail</h3>
+            <span class="text-[10px] text-slate-500 font-mono">Live Telemetry & Safety Arbitration</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="clearLogs()" class="text-[11px] text-slate-400 hover:text-slate-200 transition px-2 py-1 rounded hover:bg-slate-800">
+              <i class="fa-regular fa-trash-can mr-1"></i> Clear
+            </button>
+          </div>
+        </div>
+
+        <!-- Scrollable Log Box -->
+        <div id="logTerminal" class="flex-1 bg-slate-950/90 border border-slate-800/90 rounded-xl p-3.5 overflow-y-auto max-h-56 min-h-[12rem] text-[11px] font-mono space-y-1 text-slate-400 select-text">
+          <div class="text-emerald-400">> [SYSTEM] Dual Arbitration Hub initialized. Safety rules armed.</div>
+          <div class="text-slate-500">> [HARDWARE] Invariant bounds: Ceiling=60%, Pulse=3s, Cooldown=60s.</div>
+          <div class="text-slate-500">> [TELEMETRY] Native Web Speech API & WebSocket Client ready.</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- MODAL 1: ESP32 WebSocket Gateway Bridge Settings (Skill 3) -->
+  <div id="wsModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center space-x-2.5">
+          <div class="w-8 h-8 rounded-lg bg-teal-500/10 text-teal-400 flex items-center justify-center">
+            <i class="fa-solid fa-network-wired text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white">ESP32 WebSocket Gateway</h3>
+            <p class="text-[11px] text-slate-400">Bridge browser directly to ESP32 Port 81</p>
+          </div>
+        </div>
+        <button onclick="toggleWsModal()" class="text-slate-400 hover:text-white transition">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block font-semibold text-slate-300 mb-1">ESP32 WebSocket URL</label>
+          <input type="text" id="wsUrlInput" value="ws://192.168.4.1:81" 
+                 class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-teal-500">
+          <p class="text-[10px] text-slate-500 mt-1">Default AP IP is 192.168.4.1 (or station IP assigned by router).</p>
+        </div>
+
+        <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-1.5 text-[11px] text-slate-400">
+          <div class="font-semibold text-slate-300">JSON Protocol Specification:</div>
+          <div>Outgoing Command: <code class="text-teal-400 font-mono">{"action": "DOSE", "herb": "tulsi"}</code></div>
+          <div>Incoming Telemetry: <code class="text-emerald-400 font-mono">{"tulsi": 52.4, "mint": 48.0, ...}</code></div>
+        </div>
+
+        <div class="flex gap-2 pt-2">
+          <button id="wsConnectBtn" onclick="connectWebSocket()" class="flex-1 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-semibold text-xs transition">
+            Connect to ESP32
+          </button>
+          <button onclick="disconnectWebSocket()" class="py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition">
+            Use Sim Mode
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: Capacitive Sensor Calibration Tool (Skill 2) -->
+  <div id="calibrationModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center space-x-2.5">
+          <div class="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+            <i class="fa-solid fa-compass-drafting text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white">Soil Moisture Sensor Calibration</h3>
+            <p class="text-[11px] text-slate-400">Map 12-bit ADC raw voltages to calibrated volumetric water %</p>
+          </div>
+        </div>
+        <button onclick="closeCalibrationModal()" class="text-slate-400 hover:text-white transition">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="space-y-4 text-xs">
+        <div>
+          <label class="block font-semibold text-slate-300 mb-1">Select Herb Channel to Calibrate</label>
+          <select id="calibHerbSelect" onchange="loadHerbCalibration()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-emerald-500">
+            <!-- options inserted dynamically -->
+          </select>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+            <label class="block text-[11px] font-semibold text-slate-400 mb-1">ADC_AIR_DRY (Open Air)</label>
+            <input type="number" id="calibDryInput" value="3200" min="2000" max="4095" 
+                   class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-xs focus:outline-none focus:border-emerald-500">
+            <span class="text-[10px] text-slate-500 block mt-1">Typical dry: 3100–3300</span>
+          </div>
+
+          <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+            <label class="block text-[11px] font-semibold text-slate-400 mb-1">ADC_WATER_WET (Submerged)</label>
+            <input type="number" id="calibWetInput" value="1500" min="800" max="2500" 
+                   class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-xs focus:outline-none focus:border-emerald-500">
+            <span class="text-[10px] text-slate-500 block mt-1">Typical wet: 1400–1600</span>
+          </div>
+        </div>
+
+        <!-- Live Calibration Mapping Formula Test -->
+        <div class="bg-slate-950/70 border border-slate-800 p-3.5 rounded-xl space-y-2">
+          <div class="flex justify-between items-center text-[11px]">
+            <span class="font-semibold text-slate-400">Formula Check:</span>
+            <span class="font-mono text-teal-400">Moisture = constrain(map(rawADC, Dry, Wet, 0, 100), 0, 100)</span>
+          </div>
+
+          <div>
+            <div class="flex justify-between text-[11px] text-slate-400 mb-1">
+              <span>Test Raw ADC: <span id="calibTestAdcVal" class="font-mono font-bold text-white">2350</span></span>
+              <span>Computed Moisture: <strong id="calibTestMoistVal" class="text-emerald-400 font-mono">50%</strong></span>
+            </div>
+            <input type="range" id="calibTestSlider" min="1000" max="3600" value="2350" oninput="updateCalibrationTest()" 
+                   class="w-full accent-emerald-500 cursor-pointer">
+          </div>
+        </div>
+
+        <div class="flex gap-2 pt-2">
+          <button onclick="saveHerbCalibration()" class="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition">
+            Save & Sync to ESP32
+          </button>
+          <button onclick="closeCalibrationModal()" class="py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 3: Add New Herb Profile (Skill 1) -->
+  <div id="addHerbModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center space-x-2.5">
+          <div class="w-8 h-8 rounded-lg bg-teal-500/10 text-teal-400 flex items-center justify-center">
+            <i class="fa-solid fa-leaf text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white">Add Botanical Herb Profile</h3>
+            <p class="text-[11px] text-slate-400">Configure safety thresholds, ADC calibration & voice synonyms</p>
+          </div>
+        </div>
+        <button onclick="closeAddHerbModal()" class="text-slate-400 hover:text-white transition">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <form id="addHerbForm" onsubmit="handleAddHerbSubmit(event)" class="space-y-3 text-xs">
+        <div>
+          <label class="block font-semibold text-slate-300 mb-1">Herb Key (lowercase identifier)</label>
+          <input type="text" id="newHerbKey" placeholder="e.g. ashwagandha or neem" required
+                 class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-teal-500">
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-semibold text-slate-300 mb-1">Common Name</label>
+            <input type="text" id="newHerbName" placeholder="e.g. Ashwagandha" required
+                   class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-teal-500">
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-300 mb-1">Botanical Name</label>
+            <input type="text" id="newHerbBotanical" placeholder="e.g. Withania somnifera" required
+                   class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 text-xs italic focus:outline-none focus:border-teal-500">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-semibold text-slate-300 mb-1">Deficit Trigger (%)</label>
+            <input type="number" id="newHerbMin" value="38" min="20" max="50" required
+                   class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-teal-500">
+            <span class="text-[10px] text-slate-500">Default: 35–40%</span>
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-300 mb-1">Saturation Ceiling (%)</label>
+            <input type="number" id="newHerbMax" value="58" min="50" max="60" required
+                   class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-teal-500">
+            <span class="text-[10px] text-slate-500">Max safe: &le; 60%</span>
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-slate-300 mb-1">Voice Synonyms / Vernacular Names (comma-separated)</label>
+          <input type="text" id="newHerbSynonyms" placeholder="e.g. ashwagandha, indian ginseng, winter cherry" 
+                 class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-teal-500">
+        </div>
+
+        <div class="flex gap-2 pt-2">
+          <button type="submit" class="flex-1 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-semibold text-xs transition">
+            Create Herb Profile
+          </button>
+          <button type="button" onclick="closeAddHerbModal()" class="py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Application Logic -->
+  <script>
+    // =========================================================================
+    // 1. Botanical Profiles & State Management (Skill 1 & Rules.md)
+    // =========================================================================
+    const plants = {
+      tulsi: {
+        id: 'tulsi',
+        name: 'Tulsi',
+        botanicalName: 'Ocimum sanctum (Holy Basil)',
+        moisture: 52,
+        rawAdc: 2310,
+        adcDry: 3200,
+        adcWet: 1500,
+        minThreshold: 40,
+        maxSafety: 60,
+        pumpActive: false,
+        cooldownRemaining: 0,
+        lastWatered: '10m ago',
+        themeColor: 'emerald',
+        synonyms: ['tulsi', 'holy basil', 'basil', 'vrinda', 'surasa']
+      },
+      mint: {
+        id: 'mint',
+        name: 'Mint',
+        botanicalName: 'Mentha spicata (Pudina)',
+        moisture: 48,
+        rawAdc: 2420,
+        adcDry: 3250,
+        adcWet: 1520,
+        minThreshold: 40,
+        maxSafety: 60,
+        pumpActive: false,
+        cooldownRemaining: 0,
+        lastWatered: '25m ago',
+        themeColor: 'teal',
+        synonyms: ['mint', 'pudina', 'spearmint', 'peppermint']
+      },
+      rosemary: {
+        id: 'rosemary',
+        name: 'Rosemary',
+        botanicalName: 'Salvia rosmarinus (Gulmehndi)',
+        moisture: 38,
+        rawAdc: 2610,
+        adcDry: 3180,
+        adcWet: 1480,
+        minThreshold: 35,
+        maxSafety: 55,
+        pumpActive: false,
+        cooldownRemaining: 0,
+        lastWatered: '40m ago',
+        themeColor: 'cyan',
+        synonyms: ['rosemary', 'gulmehndi', 'salvia', "mary's mantle"]
+      }
+    };
+
+    // Global Hardware Invariants (Rules.md)
+    const INVARIANTS = {
+      PUMP_DOSE_MS: 3000,        // Fixed 3.0s pulse (~40 mL)
+      COOLDOWN_SECONDS: 60,      // 60-second capillary absorption lockout
+      ABS_MAX_CEILING: 60        // Hard invariant root hypoxia guard
+    };
+
+    // =========================================================================
+    // 2. Logging & Speech Synthesis Utilities
+    // =========================================================================
+    const logTerminal = document.getElementById('logTerminal');
+
+    function log(msg, type = 'info') {
+      const colors = {
+        info: 'text-slate-400',
+        success: 'text-emerald-400',
+        warn: 'text-amber-400',
+        error: 'text-rose-400',
+        system: 'text-teal-400'
+      };
+      const timestamp = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const entry = document.createElement('div');
+      entry.className = `${colors[type] || 'text-slate-400'} leading-relaxed`;
+      entry.textContent = `[${timestamp}] > ${msg}`;
+      logTerminal.appendChild(entry);
+      logTerminal.scrollTop = logTerminal.scrollHeight;
+    }
+
+    function clearLogs() {
+      logTerminal.innerHTML = '';
+      log('Log terminal cleared.', 'system');
+    }
+
+    function speak(text) {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.05;
+        utterance.pitch = 1.0;
+        window.speechSynthesis.speak(utterance);
+      }
+    }
+
+    // =========================================================================
+    // 3. UI Component Renderers (Dynamic Cards, Status Badges)
+    // =========================================================================
+    function renderHerbCards() {
+      const grid = document.getElementById('herbCardsGrid');
+      grid.innerHTML = '';
+
+      const keys = Object.keys(plants);
+      document.getElementById('herbCountBadge').textContent = `${keys.length} Monitored`;
+
+      keys.forEach((key, index) => {
+        const p = plants[key];
+        const card = document.createElement('div');
+        card.id = `card-${key}`;
+        card.className = "bg-slate-900/80 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between backdrop-blur-md shadow-xl transition-all duration-300 hover:border-slate-700";
+
+        card.innerHTML = `
+          <div>
+            <!-- Card Header -->
+            <div class="flex justify-between items-start mb-3">
+              <div>
+                <span class="text-[10px] font-bold uppercase tracking-wider text-${p.themeColor}-400">Herb Channel ${index + 1}</span>
+                <h3 class="text-lg font-bold text-white">${p.name}</h3>
+                <p class="text-[11px] text-slate-400 italic">${p.botanicalName}</p>
+              </div>
+              <span id="${key}Badge" class="text-xs px-2.5 py-1 rounded-full font-medium transition-colors">
+                Checking...
+              </span>
+            </div>
+
+            <!-- Telemetry & Moisture Bar -->
+            <div class="space-y-4 my-4">
+              <div>
+                <div class="flex justify-between items-baseline text-sm mb-1.5">
+                  <span class="text-xs text-slate-400">Soil Moisture</span>
+                  <div class="flex items-center gap-2">
+                    <span id="${key}RawAdc" class="text-[10px] text-slate-500 font-mono">ADC: ${p.rawAdc}</span>
+                    <span id="${key}MoistVal" class="text-base font-bold text-white">${p.moisture}%</span>
+                  </div>
+                </div>
+
+                <!-- Custom Progress Bar with Ceiling & Deficit Markers -->
+                <div class="relative w-full bg-slate-950 h-3 rounded-full overflow-hidden p-0.5 border border-slate-800">
+                  <div id="${key}MoistBar" class="bg-gradient-to-r from-teal-500 to-emerald-400 h-full rounded-full transition-all duration-700" style="width: ${p.moisture}%"></div>
+                  <!-- Marker at Deficit -->
+                  <div class="absolute top-0 bottom-0 w-[1px] bg-rose-500/80" style="left: ${p.minThreshold}%" title="Deficit Threshold (${p.minThreshold}%)"></div>
+                  <!-- Marker at Saturation Ceiling -->
+                  <div class="absolute top-0 bottom-0 w-[1px] bg-amber-400/80" style="left: ${p.maxSafety}%" title="Safety Ceiling (${p.maxSafety}%)"></div>
+                </div>
+
+                <div class="flex justify-between text-[10px] text-slate-500 mt-1">
+                  <span>Deficit: &lt;${p.minThreshold}%</span>
+                  <span>Safe: ${p.minThreshold}%–${p.maxSafety}%</span>
+                  <span>Ceiling: &ge;${p.maxSafety}%</span>
+                </div>
+              </div>
+
+              <!-- Channel Telemetry Stats Grid -->
+              <div class="grid grid-cols-2 gap-2 text-xs">
+                <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                  <span class="text-slate-500 block text-[10px] uppercase font-semibold">PUMP STATUS</span>
+                  <span id="${key}PumpStatus" class="font-semibold text-slate-300 text-xs">Idle (OFF)</span>
+                </div>
+                <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                  <span class="text-slate-500 block text-[10px] uppercase font-semibold">LAST WATERED</span>
+                  <span id="${key}LastWatered" class="font-semibold text-slate-300 text-xs">${p.lastWatered}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Manual Dosing Button with Cooldown Countdown -->
+          <div class="mt-2 pt-3 border-t border-slate-800/80">
+            <button id="${key}DoseBtn" onclick="triggerIrrigation('${key}', 'Manual Button')" 
+                    class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition border border-slate-700/80 flex items-center justify-center gap-2 active:scale-[0.98]">
+              <i class="fa-solid fa-droplet text-teal-400"></i>
+              <span id="${key}BtnText">Dispense 40 mL Pulse</span>
+            </button>
+            <div id="${key}CooldownText" class="text-[10px] text-center text-slate-500 mt-1 hidden">
+              Capillary cooldown in progress...
+            </div>
+          </div>
+        `;
+
+        grid.appendChild(card);
+        updateUI(key);
+      });
+    }
+
+    function updateUI(plantKey) {
+      const p = plants[plantKey];
+      if (!p) return;
+
+      const moistValEl = document.getElementById(`${plantKey}MoistVal`);
+      const moistBarEl = document.getElementById(`${plantKey}MoistBar`);
+      const badgeEl = document.getElementById(`${plantKey}Badge`);
+      const rawAdcEl = document.getElementById(`${plantKey}RawAdc`);
+      const doseBtn = document.getElementById(`${plantKey}DoseBtn`);
+      const btnText = document.getElementById(`${plantKey}BtnText`);
+      const cooldownText = document.getElementById(`${plantKey}CooldownText`);
+      const pumpStatus = document.getElementById(`${plantKey}PumpStatus`);
+      const lastWatered = document.getElementById(`${plantKey}LastWatered`);
+
+      if (moistValEl) moistValEl.textContent = `${p.moisture}%`;
+      if (rawAdcEl) rawAdcEl.textContent = `ADC: ${p.rawAdc}`;
+      if (lastWatered) lastWatered.textContent = p.lastWatered;
+
+      if (moistBarEl) {
+        moistBarEl.style.width = `${Math.min(100, Math.max(0, p.moisture))}%`;
+        if (p.moisture >= p.maxSafety) {
+          moistBarEl.className = "bg-amber-500 h-full rounded-full transition-all duration-700";
+        } else if (p.moisture < p.minThreshold) {
+          moistBarEl.className = "bg-rose-500 h-full rounded-full transition-all duration-700";
+        } else {
+          moistBarEl.className = "bg-gradient-to-r from-teal-500 to-emerald-400 h-full rounded-full transition-all duration-700";
+        }
+      }
+
+      // Status Badge Logic
+      if (badgeEl) {
+        if (p.pumpActive) {
+          badgeEl.textContent = 'Pumping...';
+          badgeEl.className = 'text-xs px-2.5 py-1 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 animate-pulse';
+        } else if (p.cooldownRemaining > 0) {
+          badgeEl.textContent = `Absorption (${p.cooldownRemaining}s)`;
+          badgeEl.className = 'text-xs px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono';
+        } else if (p.moisture >= p.maxSafety) {
+          badgeEl.textContent = 'Saturated (Hypoxia Guard)';
+          badgeEl.className = 'text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20';
+        } else if (p.moisture < p.minThreshold) {
+          badgeEl.textContent = 'Dry (Deficit)';
+          badgeEl.className = 'text-xs px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20';
+        } else {
+          badgeEl.textContent = 'Optimal';
+          badgeEl.className = 'text-xs px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+        }
+      }
+
+      // Button states
+      if (doseBtn && btnText) {
+        if (p.pumpActive) {
+          doseBtn.disabled = true;
+          doseBtn.className = "w-full py-2.5 bg-cyan-600/30 text-cyan-200 border border-cyan-500/40 text-xs font-semibold rounded-xl cursor-not-allowed flex items-center justify-center gap-2";
+          btnText.textContent = "Dispensing 3.0s...";
+          if (pumpStatus) {
+            pumpStatus.textContent = "ACTIVE (3s)";
+            pumpStatus.className = "font-semibold text-cyan-400 text-xs";
+          }
+        } else if (p.cooldownRemaining > 0) {
+          doseBtn.disabled = true;
+          doseBtn.className = "w-full py-2.5 bg-slate-900 text-slate-500 border border-slate-800 text-xs font-semibold rounded-xl cursor-not-allowed flex items-center justify-center gap-2";
+          btnText.textContent = `Cooldown Lock (${p.cooldownRemaining}s)`;
+          if (cooldownText) {
+            cooldownText.classList.remove('hidden');
+            cooldownText.textContent = `Allowing capillary soil absorption (${p.cooldownRemaining}s remaining)`;
+          }
+          if (pumpStatus) {
+            pumpStatus.textContent = `Resting (${p.cooldownRemaining}s)`;
+            pumpStatus.className = "font-semibold text-blue-400 text-xs";
+          }
+        } else if (p.moisture >= p.maxSafety) {
+          doseBtn.disabled = true;
+          doseBtn.className = "w-full py-2.5 bg-slate-900 text-amber-400/60 border border-amber-500/20 text-xs font-semibold rounded-xl cursor-not-allowed flex items-center justify-center gap-2";
+          btnText.textContent = `Ceiling Reached (${p.moisture}%)`;
+          if (cooldownText) cooldownText.classList.add('hidden');
+          if (pumpStatus) {
+            pumpStatus.textContent = "Idle (Safe)";
+            pumpStatus.className = "font-semibold text-slate-400 text-xs";
+          }
+        } else {
+          doseBtn.disabled = false;
+          doseBtn.className = "w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition border border-slate-700/80 flex items-center justify-center gap-2 active:scale-[0.98]";
+          btnText.textContent = "Dispense 40 mL Pulse";
+          if (cooldownText) cooldownText.classList.add('hidden');
+          if (pumpStatus) {
+            pumpStatus.textContent = "Idle (OFF)";
+            pumpStatus.className = "font-semibold text-slate-400 text-xs";
+          }
+        }
+      }
+    }
+
+    // =========================================================================
+    // 4. Safety Arbitration & Dosing Controller (Rules.md Hardware Invariants)
+    // =========================================================================
+    function triggerIrrigation(plantKey, source) {
+      const plant = plants[plantKey];
+      if (!plant) {
+        log(`[ARBITRATION REJECTED] Unknown herb key "${plantKey}".`, 'warn');
+        return;
+      }
+
+      // Invariant 1: Pump already active
+      if (plant.pumpActive) {
+        const msg = `${plant.name} pump is currently active. Please wait.`;
+        log(`[ARBITRATION REJECTED] ${msg}`, 'warn');
+        speak(msg);
+        return;
+      }
+
+      // Invariant 2: Root Hypoxia Guard (Moisture >= Safety Ceiling)
+      if (plant.moisture >= plant.maxSafety) {
+        const msg = `Safety Lockout: ${plant.name} moisture is ${plant.moisture}%. Above ${plant.maxSafety}% safety ceiling. Root hypoxia guard engaged.`;
+        log(`[SAFETY OVERRIDE] ${msg}`, 'error');
+        speak(`Cannot water ${plant.name}. Soil moisture is already at ${plant.moisture} percent, above the safety limit.`);
+        return;
+      }
+
+      // Invariant 3: Capillary Absorption Cooldown (60s Lockout)
+      if (plant.cooldownRemaining > 0) {
+        const msg = `Cooldown Lockout: ${plant.name} requires ${plant.cooldownRemaining}s more for capillary absorption.`;
+        log(`[ARBITRATION REJECTED] ${msg}`, 'warn');
+        speak(`Absorption cooldown active for ${plant.name}. Please wait ${plant.cooldownRemaining} seconds.`);
+        return;
+      }
+
+      // Approved Actuation
+      plant.pumpActive = true;
+      const successMsg = `[${source}] APPROVED: Dispensing calibrated 3-second (40 mL) pulse to ${plant.name}.`;
+      log(successMsg, 'success');
+      speak(`Watering ${plant.name} now.`);
+
+      // Send command to ESP32 via WebSocket if connected
+      sendWsCommand({ action: 'DOSE', herb: plantKey });
+
+      updateUI(plantKey);
+
+      // Enforce strictly fixed 3-second pulse duration
+      setTimeout(() => {
+        plant.pumpActive = false;
+        plant.lastWatered = 'Just now';
+
+        // In simulation mode, increment moisture and recompute raw ADC
+        if (!wsConnected) {
+          plant.moisture = Math.min(100, plant.moisture + 12);
+          plant.rawAdc = Math.round(plant.adcDry - (plant.moisture / 100) * (plant.adcDry - plant.adcWet));
+        }
+
+        log(`[ACTUATOR CLOSED] 3-second pulse finished for ${plant.name}. Initiating 60s capillary absorption cooldown.`, 'system');
+
+        // Begin 60-second capillary absorption cooldown
+        startAbsorptionCooldown(plantKey);
+      }, INVARIANTS.PUMP_DOSE_MS);
+    }
+
+    function startAbsorptionCooldown(plantKey) {
+      const plant = plants[plantKey];
+      plant.cooldownRemaining = INVARIANTS.COOLDOWN_SECONDS;
+      updateUI(plantKey);
+
+      const interval = setInterval(() => {
+        plant.cooldownRemaining -= 1;
+        updateUI(plantKey);
+
+        if (plant.cooldownRemaining <= 0) {
+          clearInterval(interval);
+          plant.cooldownRemaining = 0;
+          updateUI(plantKey);
+          log(`[COOLDOWN CLEARED] ${plant.name} capillary absorption complete. Channel ready for irrigation requests.`, 'info');
+        }
+      }, 1000);
+    }
+
+    // =========================================================================
+    // 5. Web Speech API & Vernacular Synonyms Parser (Skill 1 & Rules.md)
+    // =========================================================================
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition = null;
+    let isListening = false;
+
+    const micBtn = document.getElementById('micBtn');
+    const micIcon = document.getElementById('micIcon');
+    const micText = document.getElementById('micText');
+    const transcriptText = document.getElementById('transcriptText');
+    const speechStateTag = document.getElementById('speechStateTag');
+
+    if (SpeechRecognition) {
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        isListening = true;
+        micBtn.classList.replace('bg-emerald-600', 'bg-rose-600');
+        micBtn.classList.replace('hover:bg-emerald-500', 'hover:bg-rose-500');
+        micBtn.classList.add('mic-listening');
+        micIcon.classList.replace('fa-microphone', 'fa-microphone-lines');
+        micText.textContent = 'Listening...';
+        speechStateTag.textContent = 'Microphone Active';
+        speechStateTag.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30';
+        log('Microphone engaged. Voice commands active.', 'info');
+      };
+
+      recognition.onend = () => {
+        isListening = false;
+        micBtn.classList.replace('bg-rose-600', 'bg-emerald-600');
+        micBtn.classList.replace('hover:bg-rose-500', 'hover:bg-emerald-500');
+        micBtn.classList.remove('mic-listening');
+        micIcon.classList.replace('fa-microphone-lines', 'fa-microphone');
+        micText.textContent = 'Voice Trigger';
+        speechStateTag.textContent = 'Ready';
+        speechStateTag.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400';
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
+        transcriptText.textContent = `"${transcript}"`;
+        handleVoiceCommand(transcript);
+      };
+
+      recognition.onerror = (e) => {
+        log(`Speech recognition error: ${e.error}`, 'error');
+      };
+    } else {
+      micBtn.disabled = true;
+      micBtn.classList.replace('bg-emerald-600', 'bg-slate-800');
+      micText.textContent = 'Mic Unsupported';
+      speechStateTag.textContent = 'No Web Speech API';
+      log('Web Speech API not natively supported in this browser. Use manual text command fallback below.', 'warn');
+    }
+
+    micBtn.addEventListener('click', () => {
+      if (!recognition) return;
+      if (isListening) {
+        recognition.stop();
+      } else {
+        recognition.start();
+      }
+    });
+
+    // Voice Command Parsing with Multi-Herb Synonyms (Skill 1)
+    function handleVoiceCommand(cmd) {
+      log(`[VOICE INGEST] "${cmd}"`, 'info');
+
+      // 1. Check for Status/Report requests
+      if (/status|moisture|report|check|health|reading/i.test(cmd)) {
+        const summaries = Object.values(plants).map(p => `${p.name} is at ${p.moisture}%`);
+        const statusMsg = `Garden status: ${summaries.join(', ')}.`;
+        log(statusMsg, 'info');
+        speak(statusMsg);
+        return;
+      }
+
+      // 2. Check for Water / Irrigation actions across all registered herbs
+      const isWaterAction = /water|dose|irrigate|feed|hydrate|spray|pour/i.test(cmd);
+
+      if (isWaterAction) {
+        let matchedHerbKey = null;
+
+        // Iterate through all plants and check synonyms
+        for (const [key, plant] of Object.entries(plants)) {
+          for (const syn of plant.synonyms) {
+            // Regex word boundary match
+            const pattern = new RegExp(`\\b${syn}\\b`, 'i');
+            if (pattern.test(cmd)) {
+              matchedHerbKey = key;
+              break;
+            }
+          }
+          if (matchedHerbKey) break;
+        }
+
+        if (matchedHerbKey) {
+          triggerIrrigation(matchedHerbKey, 'Voice Command');
+          return;
+        }
+      }
+
+      log(`[ARBITRATION] No matching botanical command for: "${cmd}". Say e.g. "Water Tulsi" or "Status".`, 'warn');
+      speak("Command not recognized. Please specify which herb to water.");
+    }
+
+    // Manual Command Input Handler
+    function handleManualCommand(e) {
+      e.preventDefault();
+      const input = document.getElementById('manualCommandInput');
+      const val = input.value.trim();
+      if (!val) return;
+      transcriptText.textContent = `"${val}"`;
+      handleVoiceCommand(val.toLowerCase());
+      input.value = '';
+    }
+
+    // =========================================================================
+    // 6. WebSocket Client & Bridge Protocol (Skill 3)
+    // =========================================================================
+    let ws = null;
+    let wsConnected = false;
+
+    const wsStatusPing = document.getElementById('wsStatusPing');
+    const wsStatusDot = document.getElementById('wsStatusDot');
+    const wsStatusText = document.getElementById('wsStatusText');
+    const gatewayMode = document.getElementById('gatewayMode');
+    const wsConnectBtn = document.getElementById('wsConnectBtn');
+
+    function toggleWsModal() {
+      const modal = document.getElementById('wsModal');
+      modal.classList.toggle('hidden');
+    }
+
+    function connectWebSocket() {
+      const url = document.getElementById('wsUrlInput').value.trim();
+      log(`[WS] Attempting bridge to ESP32 at ${url}...`, 'system');
+
+      try {
+        if (ws) ws.close();
+        ws = new WebSocket(url);
+
+        ws.onopen = () => {
+          wsConnected = true;
+          wsStatusPing.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75";
+          wsStatusDot.className = "relative inline-flex rounded-full h-2 w-2 bg-emerald-500";
+          wsStatusText.textContent = "ESP32 Linked (Port 81)";
+          gatewayMode.textContent = "ESP32 Hardware Online";
+          wsConnectBtn.textContent = "Disconnect";
+          wsConnectBtn.className = "flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs transition";
+          log(`[WS CONNECTED] Successfully bridged to ESP32 gateway at ${url}`, 'success');
+          toggleWsModal();
+        };
+
+        ws.onclose = () => {
+          wsConnected = false;
+          wsStatusPing.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75";
+          wsStatusDot.className = "relative inline-flex rounded-full h-2 w-2 bg-amber-500";
+          wsStatusText.textContent = "Sim Mode (Offline)";
+          gatewayMode.textContent = "Simulation Engine";
+          wsConnectBtn.textContent = "Connect to ESP32";
+          wsConnectBtn.className = "flex-1 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-semibold text-xs transition";
+          log('[WS DISCONNECTED] WebSocket closed. Reverted to simulation engine.', 'warn');
+        };
+
+        ws.onerror = (err) => {
+          log('[WS ERROR] Connection failed. ESP32 unreachable. Retaining simulation fallback.', 'error');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            parseIncomingTelemetry(data);
+          } catch (e) {
+            log(`[WS PARSE ERROR] Invalid packet: ${event.data}`, 'error');
+          }
+        };
+      } catch (e) {
+        log(`[WS INIT ERROR] ${e.message}`, 'error');
+      }
+    }
+
+    function disconnectWebSocket() {
+      if (ws) ws.close();
+      wsConnected = false;
+      toggleWsModal();
+    }
+
+    function sendWsCommand(payload) {
+      if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
+        const jsonStr = JSON.stringify(payload);
+        ws.send(jsonStr);
+        log(`[WS OUT] ${jsonStr}`, 'system');
+      }
+    }
+
+    // Ingest incoming telemetry packets (Skill 3: Format & Parsing)
+    function parseIncomingTelemetry(data) {
+      // Supports nested { herbs: { tulsi: { moisture: 52.4, rawAdc: 2310, pump: false } } }
+      // Or flat compact { tulsi: 52.4, mint: 48.0, pump: false }
+      if (data.herbs) {
+        for (const [key, info] of Object.entries(data.herbs)) {
+          if (plants[key]) {
+            if (info.moisture !== undefined) plants[key].moisture = parseFloat(info.moisture);
+            if (info.rawAdc !== undefined) plants[key].rawAdc = parseInt(info.rawAdc);
+            if (info.pump !== undefined) plants[key].pumpActive = !!info.pump;
+            if (info.cooldownRemaining !== undefined) plants[key].cooldownRemaining = parseInt(info.cooldownRemaining);
+            updateUI(key);
+          }
+        }
+      } else {
+        // Flat telemetry format
+        for (const [key, val] of Object.entries(data)) {
+          if (plants[key] && typeof val === 'number') {
+            plants[key].moisture = val;
+            updateUI(key);
+          }
+        }
+      }
+    }
+
+    // =========================================================================
+    // 7. Capacitive Probe Calibration Tool (Skill 2)
+    // =========================================================================
+    function openCalibrationModal() {
+      const select = document.getElementById('calibHerbSelect');
+      select.innerHTML = '';
+      Object.keys(plants).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = `${plants[key].name} (${plants[key].botanicalName})`;
+        select.appendChild(opt);
+      });
+      loadHerbCalibration();
+      document.getElementById('calibrationModal').classList.remove('hidden');
+    }
+
+    function closeCalibrationModal() {
+      document.getElementById('calibrationModal').classList.add('hidden');
+    }
+
+    function loadHerbCalibration() {
+      const key = document.getElementById('calibHerbSelect').value;
+      const p = plants[key];
+      if (!p) return;
+      document.getElementById('calibDryInput').value = p.adcDry;
+      document.getElementById('calibWetInput').value = p.adcWet;
+      updateCalibrationTest();
+    }
+
+    function updateCalibrationTest() {
+      const dry = parseInt(document.getElementById('calibDryInput').value) || 3200;
+      const wet = parseInt(document.getElementById('calibWetInput').value) || 1500;
+      const testAdc = parseInt(document.getElementById('calibTestSlider').value);
+
+      document.getElementById('calibTestAdcVal').textContent = testAdc;
+
+      // Linear Calibration Mapping:
+      // Moisture% = constrain(map(rawADC, ADC_AIR_DRY, ADC_WATER_WET, 0, 100), 0, 100)
+      let calc = 0;
+      if (dry !== wet) {
+        calc = Math.round(((testAdc - dry) / (wet - dry)) * 100);
+        calc = Math.max(0, Math.min(100, calc));
+      }
+      document.getElementById('calibTestMoistVal').textContent = `${calc}%`;
+    }
+
+    function saveHerbCalibration() {
+      const key = document.getElementById('calibHerbSelect').value;
+      const p = plants[key];
+      if (!p) return;
+
+      p.adcDry = parseInt(document.getElementById('calibDryInput').value);
+      p.adcWet = parseInt(document.getElementById('calibWetInput').value);
+
+      // Re-map current moisture based on new bounds
+      p.moisture = Math.round(Math.max(0, Math.min(100, ((p.rawAdc - p.adcDry) / (p.adcWet - p.adcDry)) * 100)));
+
+      updateUI(key);
+
+      // Sync calibration to physical ESP32
+      sendWsCommand({
+        action: 'CALIBRATE',
+        herb: key,
+        adcDry: p.adcDry,
+        adcWet: p.adcWet
+      });
+
+      log(`[CALIBRATION UPDATED] ${p.name}: Dry=${p.adcDry}, Wet=${p.adcWet}. Live moisture remapped to ${p.moisture}%.`, 'success');
+      closeCalibrationModal();
+    }
+
+    // =========================================================================
+    // 8. Add Botanical Herb Profile Flow (Skill 1)
+    // =========================================================================
+    function openAddHerbModal() {
+      document.getElementById('addHerbModal').classList.remove('hidden');
+    }
+
+    function closeAddHerbModal() {
+      document.getElementById('addHerbModal').classList.add('hidden');
+    }
+
+    function handleAddHerbSubmit(e) {
+      e.preventDefault();
+      const key = document.getElementById('newHerbKey').value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      const name = document.getElementById('newHerbName').value.trim();
+      const botanicalName = document.getElementById('newHerbBotanical').value.trim();
+      const minThreshold = parseInt(document.getElementById('newHerbMin').value) || 38;
+      const maxSafety = Math.min(60, parseInt(document.getElementById('newHerbMax').value) || 58);
+      const synonymsInput = document.getElementById('newHerbSynonyms').value;
+
+      if (!key || !name) return;
+
+      const synonyms = synonymsInput
+        ? synonymsInput.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0)
+        : [name.toLowerCase(), key];
+
+      // Insert into state map
+      plants[key] = {
+        id: key,
+        name: name,
+        botanicalName: botanicalName,
+        moisture: 42,
+        rawAdc: 2480,
+        adcDry: 3200,
+        adcWet: 1500,
+        minThreshold: minThreshold,
+        maxSafety: maxSafety,
+        pumpActive: false,
+        cooldownRemaining: 0,
+        lastWatered: 'Newly registered',
+        themeColor: 'emerald',
+        synonyms: synonyms
+      };
+
+      renderHerbCards();
+      closeAddHerbModal();
+      document.getElementById('addHerbForm').reset();
+
+      log(`[NEW PROFILE] Added "${name}" (${botanicalName}) to botanical registry. Speech patterns updated for: [${synonyms.join(', ')}].`, 'success');
+      speak(`Added ${name} to your garden registry.`);
+    }
+
+    // =========================================================================
+    // 9. Realistic Soil Physics Simulation Engine (When Offline)
+    // =========================================================================
+    setInterval(() => {
+      if (wsConnected) return; // ESP32 handles physical telemetry when connected
+
+      Object.keys(plants).forEach(key => {
+        const p = plants[key];
+        if (p.pumpActive) return; // Don't drain while dispensing
+
+        // Subtle realistic evaporation loss every 15 seconds
+        if (Math.random() < 0.25 && p.moisture > 20) {
+          p.moisture = Math.max(0, p.moisture - 1);
+          // Recalculate raw ADC according to calibration curve
+          p.rawAdc = Math.round(p.adcDry - (p.moisture / 100) * (p.adcDry - p.adcWet));
+          updateUI(key);
+        }
+      });
+    }, 15000);
+
+    // =========================================================================
+    // 10. Initialization
+    // =========================================================================
+    document.addEventListener('DOMContentLoaded', () => {
+      renderHerbCards();
+      log('System ready. Voice recognition and arbitration rules active.', 'info');
+    });
+  </script>
+</body>
+</html>
